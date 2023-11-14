@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Marked</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.8.1/mapbox-gl.css' rel='stylesheet' />
+    <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.8.1/mapbox-gl.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mapbox-gl-leaflet/0.0.16/leaflet-mapbox-gl.js'></script>
+
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #181818;
+            color: #ffffff;
+        }
+
+        .logo-container {
+            background-color: #181818;
+            padding: 10px 20px;
+            border-radius: 5px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 40px;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .subtitle {
+            font-size: 16px;
+            margin-top: 5px;
+            letter-spacing: 1px;
+            color: #666;
+        }
+
+        #map {
+            margin: 50px auto;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+        }
+
+        button#submit {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background-color: #181818;
+            border: 2px solid #ffffff;
+            border-radius: 5px;
+            color: #ffffff;
+            cursor: pointer;
+            transition: 0.3s ease-in-out;
+        }
+
+        button#submit:hover {
+            background-color: #ffffff;
+            color: #181818;
+        }
+
+        .input-container {
+            margin: 0 auto 20px auto;
+            text-align: center;
+        }
+
+        .input-container input[type="text"] {
+            padding: 10px;
+            margin: 0 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            width: 200px;
+        }
+
+        .station-label {
+            background-color: transparent;
+            border: none;
+            color: white;
+            font-size: 12px;
+            text-align: center;
+            white-space: nowrap;
+            text-shadow:
+                -1px -1px 0 #000,
+                 1px -1px 0 #000,
+                 -1px 1px 0 #000,
+                  1px 1px 0 #000;
+        }
+
+
+    </style>
+</head>
+<body>
+
+<div class="logo-container">
+    <div class="logo">MARKED</div>
+    <div class="subtitle">WAYFINDING SYSTEM</div>
+</div>
+
+<div id="map" style="width: 600px; height: 400px;"></div>
+<div class="input-container">
+    <input type="text" id="start-input" placeholder="Start Station" />
+    <input type="text" id="end-input" placeholder="End Station" />
+</div>
+<button id="submit">Find Route</button>
+
+<script>
+    // Initialize autofill for station names
+    function initializeStationAutofill(inputId) {
+        $.get('/search_stations', function(stationNames) {
+            $(`#${inputId}`).autocomplete({
+                source: stationNames,
+                minLength: 2
+            });
+        });
+    }
+
+    initializeStationAutofill('start-input');
+    initializeStationAutofill('end-input');
+
+    // Set up the map
+    var map = L.map('map').setView([55.9511, -3.1953], 13.5);
+    L.mapboxGL({
+        accessToken: 'pk.eyJ1IjoibHVjaWFiMSIsImEiOiJjbG9rNHhhd3MyOGw2MmpvMnFmMjRyb3NzIn0.baw5FhFodMFzYg0etjz4_A',
+        style: 'mapbox://styles/mapbox/navigation-night-v1'
+    }).addTo(map);
+
+    /// Variables to hold the selected station coordinates and markers
+    var startPoint, endPoint, startMarker, endMarker;
+
+    // Function to get coordinates for a given station name and place a marker
+    function getStationCoordsAndPlaceMarker(stationName, isStart) {
+        $.ajax({
+            url: '/station_coords',
+            type: 'GET',
+            data: { name: stationName },
+            dataType: 'json',
+            success: function(response) {
+                if (response && response.coordinates) {
+                    console.log("Coordinates for " + stationName + ":", response.coordinates);
+                    var latLng = L.latLng(response.coordinates.lat, response.coordinates.lng);
+                    var marker = L.marker(latLng).addTo(map).bindPopup(stationName);
+
+                    if (isStart) {
+                        if (startMarker) map.removeLayer(startMarker);
+                        startPoint = latLng;
+                        startMarker = marker;
+                    } else {
+                        if (endMarker) map.removeLayer(endMarker);
+                        endPoint = latLng;
+                        endMarker = marker;
+                    }
+
+                    marker.openPopup()
+
+                    if (startPoint && endPoint) {
+                        requestRoute();
+                    }
+                } else {
+                    console.error("No coordinates found for station name: " + stationName);
+                }
+            },
+            error: function(xhr, status, error) {
+                console.error("Failed to get coordinates for station:", error);
+            }
+        });
+    }
+
+    // Function to request the route and display it
+    function requestRoute() {
+        // Ensure both start and end points are available
+        if (!startPoint || !endPoint) {
+            console.error("Start or end point is not set.");
+            return;
+        }
+
+        // Prepare the data for the POST request
+        var requestData = {
+            start_lon: startPoint.lng,
+            start_lat: startPoint.lat,
+            end_lon: endPoint.lng,
+            end_lat: endPoint.lat
+        };
+
+        // Perform the POST request to get the route
+        $.ajax({
+            url: '/shortest_route',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(requestData),
+            dataType: 'json',
+            success: function(response) {
+                console.log("Route data received:", response);
+                if (response.route_geojson) {
+                    // TODO: Process the route data and display it on the site
+
+                } else {
+                    console.error('Response does not contain valid route data.');
+                }
+            },
+            error: function(xhr, status, error) {
+                console.error('An error occurred:', error);
+            }
+        });
+    }
+
+    // Event handler for the "Find Route" button
+    $("#submit").click(function() {
+        var startStation = $('#start-input').val();
+        var endStation = $('#end-input').val();
+
+        if (!startStation || !endStation) {
+            alert("Please enter both start and end stations.");
+            return;
+        }
+
+        // Reset the start and end points
+        startPoint = null;
+        endPoint = null;
+
+        // Get coordinates and place markers for start and end stations
+        getStationCoordsAndPlaceMarker(startStation, true);
+        getStationCoordsAndPlaceMarker(endStation, false);
+    });
+
+    $.get('/all_routes', function(data) {
+        L.geoJSON(data, {
+            style: function (feature) {
+                if (feature.geometry.type === "MultiLineString") {
+                    return {
+                        color: 'yellow',
+                        opacity: 0.8,
+                        weight: 3
+                    };
+                }
+                return {};
+            },
+            pointToLayer: function (feature, latlng) {
+                if (feature.properties && feature.properties.name) {
+                    // Create a small circle marker for each station
+                    var circleMarker = L.circleMarker(latlng, {
+                        radius: 3,
+                        fillColor: "#0087ff",
+                        color: "#000",
+                        weight: 1,
+                        opacity: 1,
+                        fillOpacity: 0.8
+                    });
+
+                    var label = L.divIcon({
+                        className: 'station-label',
+                        html: feature.properties.name,
+                        iconSize: null
+                    });
+
+                    L.marker(latlng, { icon: label }).addTo(map);
+
+                    return circleMarker;
+                }
+            }
+        }).addTo(map);
+    });
+
+</script>
+
+
+</body>
+</html>
